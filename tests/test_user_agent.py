@@ -46,6 +46,7 @@ def test_user_agent_in_http_request():
         server.server_close()
 
     assert CaptureHandler.captured_user_agent is not None, "No request received"
-    assert "b2ai-comfyui" in CaptureHandler.captured_user_agent, (
-        f"Expected 'b2ai-comfyui' in User-Agent, got: {CaptureHandler.captured_user_agent}"
+    ua = CaptureHandler.captured_user_agent
+    assert "b2ai-comfyui" in ua, (
+        f"Expected 'b2ai-comfyui' in User-Agent, got: {ua}"
     )

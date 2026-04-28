@@ -100,7 +100,10 @@ class TestCreateS3Client:
         )
         config = mock_boto3.client.call_args.kwargs["config"]
         assert isinstance(config, Config)
-        assert config.user_agent_extra == "b2ai-comfyui"
+        # RFC 7231 product token: `b2ai-comfyui/<version>` when the package
+        # is installed, falling back to the bare name from source loads.
+        ua = config.user_agent_extra
+        assert ua == "b2ai-comfyui" or ua.startswith("b2ai-comfyui/")
 
     def test_extra_kwargs_ignored(self):
         # Splatting a full profile dict (with bucket/path_prefix/default_tags)
@@ -155,6 +158,24 @@ class TestClientCache:
                     provider="AWS S3", access_key=f"K{i}", secret_key="S",
                 )
             assert len(_client_cache) == 16
+
+
+class TestUserAgentSuffix:
+    """The custom suffix should be `b2ai-comfyui/<version>` when the package
+    is installed and resolvable, falling back to the bare name otherwise."""
+
+    def test_versioned_when_installed(self):
+        from unittest.mock import patch
+        from comfyui_cloud_storage import providers
+        with patch.object(providers, "version", return_value="9.9.9"):
+            assert providers._user_agent_suffix() == "b2ai-comfyui/9.9.9"
+
+    def test_falls_back_when_not_installed(self):
+        from unittest.mock import patch
+        from importlib.metadata import PackageNotFoundError
+        from comfyui_cloud_storage import providers
+        with patch.object(providers, "version", side_effect=PackageNotFoundError):
+            assert providers._user_agent_suffix() == "b2ai-comfyui"
 
 
 class TestEncodeTags:

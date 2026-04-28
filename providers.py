@@ -7,6 +7,24 @@ DigitalOcean Spaces, GCS (S3 interop), and any custom S3 endpoint.
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
+
+_USER_AGENT_NAME = "b2ai-comfyui"
+
+
+def _user_agent_suffix() -> str:
+    """Custom product token appended to boto3's default User-Agent.
+
+    Format follows RFC 7231 (`name/version`) so server-side log parsers can
+    identify this integration and the release it came from. Falls back to
+    the bare name when the package is loaded directly from source without
+    being installed.
+    """
+    try:
+        return f"{_USER_AGENT_NAME}/{version('comfyui-cloud-storage')}"
+    except PackageNotFoundError:
+        return _USER_AGENT_NAME
+
 
 # Bounded LRU cache of boto3 clients. Each ComfyUI workflow tends to reuse the
 # same one or two profiles across many node executions; rebuilding the client
@@ -117,7 +135,7 @@ def create_s3_client(
             signature_version="s3v4",
             s3={"addressing_style": "path" if preset.force_path_style else "auto"},
             retries={"max_attempts": 3, "mode": "adaptive"},
-            user_agent_extra="b2ai-comfyui",
+            user_agent_extra=_user_agent_suffix(),
         ),
     }
     if effective_endpoint:
