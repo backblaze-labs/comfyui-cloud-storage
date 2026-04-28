@@ -169,6 +169,57 @@ class TestValidateConfig:
         })
 
 
+class TestReadOnlyMode:
+    """validate_config(mode='write') must reject profiles with read_only=True."""
+
+    def _base_config(self):
+        return {"access_key": "x", "secret_key": "x", "bucket": "x"}
+
+    def test_read_mode_allowed_on_read_only_profile(self):
+        from comfyui_cloud_storage.profile import validate_config
+        cfg = {**self._base_config(), "read_only": True}
+        validate_config(cfg, mode="read")  # must not raise
+
+    def test_write_mode_rejected_on_read_only_profile(self):
+        from comfyui_cloud_storage.profile import validate_config
+        cfg = {**self._base_config(), "read_only": True}
+        with pytest.raises(ValueError, match="read_only"):
+            validate_config(cfg, mode="write")
+
+    def test_write_mode_allowed_on_writable_profile(self):
+        from comfyui_cloud_storage.profile import validate_config
+        cfg = {**self._base_config(), "read_only": False}
+        validate_config(cfg, mode="write")  # must not raise
+
+    def test_default_mode_is_read(self):
+        # mode defaults to read so existing callers stay non-restrictive.
+        from comfyui_cloud_storage.profile import validate_config
+        cfg = {**self._base_config(), "read_only": True}
+        validate_config(cfg)  # default mode should allow it
+
+
+class TestPlatformErrorMessages:
+    """validate_config error messages must include platform-appropriate shell hints."""
+
+    @patch("comfyui_cloud_storage.profile.sys.platform", "win32")
+    def test_windows_uses_setx(self):
+        from comfyui_cloud_storage.profile import validate_config
+        with pytest.raises(ValueError, match="setx"):
+            validate_config({"access_key": "", "secret_key": "x", "bucket": "x"})
+
+    @patch("comfyui_cloud_storage.profile.sys.platform", "darwin")
+    def test_macos_uses_export_zshrc(self):
+        from comfyui_cloud_storage.profile import validate_config
+        with pytest.raises(ValueError, match="zshrc"):
+            validate_config({"access_key": "", "secret_key": "x", "bucket": "x"})
+
+    @patch("comfyui_cloud_storage.profile.sys.platform", "linux")
+    def test_linux_uses_export_bashrc(self):
+        from comfyui_cloud_storage.profile import validate_config
+        with pytest.raises(ValueError, match="bashrc"):
+            validate_config({"access_key": "", "secret_key": "x", "bucket": "x"})
+
+
 class TestApplyPrefix:
     def test_no_prefix_no_slash(self):
         from comfyui_cloud_storage.profile import apply_prefix

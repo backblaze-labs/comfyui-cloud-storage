@@ -3,6 +3,7 @@
 import io as io_stdlib
 import os
 import logging
+import time
 
 import numpy as np
 import torch
@@ -14,6 +15,23 @@ import comfy.utils
 from .nodes_profile import S3_PROFILE_TYPE
 from .profile import apply_prefix, resolve_default_profile, validate_config
 from .providers import create_s3_client
+
+
+def _format_bytes(n: int) -> str:
+    """Compact, human-readable byte size for status text."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+        n /= 1024
+
+
+def _format_duration(seconds: float) -> str:
+    """Compact, human-readable duration for status text."""
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
 
 logger = logging.getLogger(__name__)
 
@@ -186,13 +204,19 @@ class LoadModelFromCloud(io.ComfyNode):
                         cached_etag = f.read().strip()
                     if cached_etag == remote_etag:
                         logger.info("Model cached: %s", local_path)
-                        return io.NodeOutput(filename)
+                        return io.NodeOutput(
+                            filename,
+                            ui={"text": [f"cached: {filename}"]},
+                        )
             except ClientError as e:
                 # Network/auth blip but local copy exists — use it and warn.
                 logger.warning(
                     "Could not verify cached model against remote (%s); using local copy.", e,
                 )
-                return io.NodeOutput(filename)
+                return io.NodeOutput(
+                    filename,
+                    ui={"text": [f"cached (unverified): {filename}"]},
+                )
 
         try:
             head = client.head_object(Bucket=bucket, Key=full_key)
@@ -212,6 +236,7 @@ class LoadModelFromCloud(io.ComfyNode):
 
         pbar = comfy.utils.ProgressBar(file_size)
         downloaded = 0
+        start = time.monotonic()
 
         def progress_callback(bytes_amount):
             nonlocal downloaded
@@ -229,6 +254,8 @@ class LoadModelFromCloud(io.ComfyNode):
                 os.remove(temp_path)
             raise
 
+        elapsed = time.monotonic() - start
+
         # Atomic ETag write: write to a tmp file then rename, so a crash
         # mid-write can't leave a half-written sentinel beside a complete model.
         if remote_etag:
@@ -237,8 +264,12 @@ class LoadModelFromCloud(io.ComfyNode):
                 f.write(remote_etag)
             os.replace(etag_tmp, etag_path)
 
+        status = (
+            f"downloaded: {filename} ({_format_bytes(file_size)} "
+            f"in {_format_duration(elapsed)})"
+        )
         logger.info("Model downloaded to: %s", local_path)
-        return io.NodeOutput(filename)
+        return io.NodeOutput(filename, ui={"text": [status]})
 
 
 class LoadAudioFromCloud(io.ComfyNode):

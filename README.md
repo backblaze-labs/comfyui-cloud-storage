@@ -1,6 +1,6 @@
 # comfyui-cloud-storage
 
-Cloud storage nodes for ComfyUI. Save images, video, and audio to any S3-compatible provider. Download and cache models from cloud storage. Works with Backblaze B2, AWS S3, Cloudflare R2, MinIO, Wasabi, DigitalOcean Spaces, and Google Cloud Storage.
+Cloud storage nodes for ComfyUI. Save images, video, and audio to any S3-compatible provider. Download and cache models from cloud storage. Works with Backblaze B2, AWS S3, Cloudflare R2, Wasabi, DigitalOcean Spaces, and Google Cloud Storage.
 
 > Upload generated content and manage AI models across machines using a single set of ComfyUI nodes and one `boto3` dependency.
 
@@ -14,7 +14,7 @@ ComfyUI stores everything on the local filesystem. Generated outputs pile up on 
 
 ### Solution
 
-This package adds 9 nodes that plug directly into the ComfyUI graph. Save nodes upload generated images, video, and audio to your bucket. Load nodes pull images and audio back into the pipeline, and download and cache models locally with ETag-based invalidation and progress bars. Browse nodes list bucket contents and generate presigned sharing URLs. All nodes use the same credential profile, resolved from environment variables or a JSON config file -- secrets never appear in workflow JSON.
+This package adds 10 nodes that plug directly into the ComfyUI graph. Save nodes upload generated images, video, and audio to your bucket. Load nodes pull images and audio back into the pipeline, and download and cache models locally with ETag-based invalidation and progress bars. Browse nodes list bucket contents, generate presigned sharing URLs, and verify your connection. All nodes use the same credential profile, resolved from environment variables or a JSON config file -- secrets never appear in workflow JSON.
 
 ### Who Should Use This
 
@@ -24,7 +24,7 @@ This package adds 9 nodes that plug directly into the ComfyUI graph. Save nodes 
 
 ## Key Features
 
-- **Multi-provider** -- Built-in presets for Backblaze B2, AWS S3, Cloudflare R2, MinIO, Wasabi, DigitalOcean Spaces, and GCS. Any S3-compatible endpoint works via the Custom provider.
+- **Multi-provider** -- Built-in presets for Backblaze B2, AWS S3, Cloudflare R2, Wasabi, DigitalOcean Spaces, and GCS. Any S3-compatible endpoint works via the Custom provider.
 - **Configure once** -- The Cloud Storage Profile node outputs a connection that wires to every other node. No repeated credential entry.
 - **Save images, video, audio** -- Upload directly from the pipeline in PNG, JPG, WebP, MP4, WebM, FLAC, MP3, or WAV.
 - **Download and cache models** -- Pull checkpoints, LoRAs, VAEs, and other model files from a bucket to the correct local `models/` directory. Skips re-download when the remote file hasn't changed (ETag comparison).
@@ -64,14 +64,22 @@ This package adds 9 nodes that plug directly into the ComfyUI graph. Save nodes 
 | Node | Category | Inputs | Outputs |
 |------|----------|--------|---------|
 | **Cloud Storage Profile** | `cloud_storage` | profile, provider, bucket, path_prefix | `S3_PROFILE` |
-| **Save Image to Cloud** | `cloud_storage/save` | images, key_prefix, filename, format, quality, profile | UI text |
-| **Save Video to Cloud** | `cloud_storage/save` | video, key_prefix, filename, format, codec, profile | UI text |
-| **Save Audio to Cloud** | `cloud_storage/save` | audio, key_prefix, filename, format, profile | UI text |
+| **Save Image to Cloud** | `cloud_storage/save` | images, key_prefix, filename, format, quality, presign_url, expires_hours, profile | key (STRING), url (STRING) |
+| **Save Video to Cloud** | `cloud_storage/save` | video, key_prefix, filename, format, codec, profile | key (STRING) |
+| **Save Audio to Cloud** | `cloud_storage/save` | audio, key_prefix, filename, format, profile | key (STRING) |
 | **Load Image from Cloud** | `cloud_storage/load` | key, profile | IMAGE, MASK |
 | **Load Audio from Cloud** | `cloud_storage/load` | key, profile | AUDIO |
 | **Download Model from Cloud** | `cloud_storage/models` | model_type, key, force_redownload, profile | model_filename (STRING) |
 | **List Bucket Contents** | `cloud_storage/browse` | prefix, max_results, profile | file_list (STRING) |
 | **Generate Sharing URL** | `cloud_storage/browse` | key, expires_hours, profile | url (STRING) |
+| **Test Cloud Connection** | `cloud_storage` | profile | report (STRING) |
+
+## Example workflows
+
+The fastest way to learn this package is to drag one of the workflows in
+[`examples/`](./examples/) into your ComfyUI canvas. Start with
+`02_test_connection.json` to confirm your credentials work, then explore the
+others. See [`examples/README.md`](./examples/README.md) for the full list.
 
 ## Quick Start
 
@@ -79,7 +87,7 @@ Prerequisites:
 
 - ComfyUI installed and running
 - Python >= 3.10
-- A bucket on any S3-compatible provider (B2, S3, R2, MinIO, etc.)
+- A bucket on any S3-compatible provider (B2, S3, R2, etc.)
 - Access key and secret key for that provider
 
 ```bash
@@ -202,7 +210,6 @@ Check your bucket via the provider console or use the **List Bucket Contents** n
 | Backblaze B2 | `Backblaze B2` | `us-west-004` | Free 10 GB storage |
 | AWS S3 | `AWS S3` | `us-east-1` | |
 | Cloudflare R2 | `Cloudflare R2` | `auto` | Requires `COMFY_S3_ACCOUNT_ID` |
-| MinIO | `MinIO` | `us-east-1` | Uses path-style addressing |
 | Wasabi | `Wasabi` | `us-east-1` | |
 | DigitalOcean Spaces | `DigitalOcean Spaces` | `nyc3` | |
 | GCS (S3 interop) | `GCS (S3 interop)` | `auto` | Uses HMAC keys |
@@ -230,6 +237,39 @@ Stored at `ComfyUI/user/__cloud_storage/profiles.json`:
 ```
 
 Credentials are resolved in order: environment variables -> named profile -> per-node widget overrides. Later layers override earlier ones. Widget overrides only apply to `bucket` and `path_prefix` -- credentials always come from env vars or the profile file.
+
+### Filename templates
+
+Save nodes accept these tokens in the `filename` widget:
+
+| Token | Expands to | Example |
+|-------|-----------|---------|
+| `%batch_num%` | Batch index, starting at 0 | `ComfyUI_%batch_num%` -> `ComfyUI_0` |
+| `%date%` | Local date `YYYY-MM-DD` | `out/%date%/img` -> `out/2026-04-28/img` |
+| `%time%` | Local time `HHMMSS` | `clip_%time%` -> `clip_142233` |
+| `%uuid%` | Random 8-char hex | `share_%uuid%` -> `share_8f3a2b71` |
+
+### Read-only profiles
+
+Add `"read_only": true` to a profile in `profiles.json` and save nodes will
+refuse to upload through it. Useful for shared inference machines that should
+download models but never write generated content. Load and browse nodes work
+as normal.
+
+### Object tagging
+
+Add `"default_tags": {"key": "value", ...}` to a profile to apply S3 object
+tags to every uploaded object. Tags are useful for cost allocation, lifecycle
+policies, and search. Skipped automatically on Backblaze B2, which does not
+implement the S3 PutObjectTagging API.
+
+### Profile reload
+
+Edits to `profiles.json` are picked up on ComfyUI server restart. The file is
+read each time a node executes, so credential changes take effect on the next
+queue run, but the **profile dropdown** in `Cloud Storage Profile` is built
+when ComfyUI loads the schema, so newly added profiles will not appear until
+you restart the server.
 
 ### Path prefix behavior
 

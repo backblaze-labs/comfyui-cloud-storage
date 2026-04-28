@@ -66,6 +66,26 @@ def _setup_comfy_mocks():
 # Set up mocks before any package imports
 _setup_comfy_mocks()
 
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_client_cache():
+    """Clear the boto3 client cache between tests so a mock from one test
+    doesn't leak into another via the LRU."""
+    try:
+        from comfyui_cloud_storage.providers import clear_client_cache
+        clear_client_cache()
+    except ImportError:
+        pass
+    yield
+    try:
+        from comfyui_cloud_storage.providers import clear_client_cache
+        clear_client_cache()
+    except ImportError:
+        pass
+
 # Register the package under an importable name (directory has hyphens)
 pkg_root = Path(__file__).parent.parent
 sys.path.insert(0, str(pkg_root.parent))  # add oss/ to path

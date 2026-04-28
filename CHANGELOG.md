@@ -4,6 +4,56 @@ All notable changes to this project will be documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-28
+
+### Added
+- `TestCloudConnection` node — issues `head_bucket` and a 3-key list against
+  the configured profile and returns a one-line OK report with wall-clock
+  latency. Use it to surface credential/bucket misconfigurations before
+  queueing a real workflow.
+- Save nodes (`SaveImageToCloud`, `SaveVideoToCloud`, `SaveAudioToCloud`) now
+  expose a `key` STRING graph output. For batches, the first key is returned;
+  this is the only safe shape to feed into downstream single-key nodes like
+  `Generate Sharing URL`.
+- `SaveImageToCloud` gained `presign_url` (bool) + `expires_hours` (int)
+  inputs and a `url` STRING output. Toggle on to emit a presigned URL inline
+  with the upload — no separate node required.
+- New filename-template tokens for save nodes: `%date%` (YYYY-MM-DD),
+  `%time%` (HHMMSS), `%uuid%` (8-char). `%batch_num%` continues to work.
+- `read_only: true` flag in `profiles.json` blocks save nodes from uploading
+  through that profile, enforced centrally via `validate_config(mode="write")`.
+- `default_tags: {...}` in `profiles.json` applies S3 object tags to every
+  uploaded object. Skipped automatically on Backblaze B2, which does not
+  implement the S3 PutObjectTagging API.
+- `LoadModelFromCloud` returns a UI text status line — `cached: foo.safetensors`
+  on cache hit, or `downloaded: foo.safetensors (4.2 GB in 3m12s)` on miss.
+- Module-level boto3 client cache (LRU, max 16 entries) keyed on credential
+  fields. Identical config across nodes reuses the same boto3 client. Note:
+  rotated credentials require a ComfyUI restart to take effect.
+- Platform-specific shell hints in credential-not-configured error messages
+  (`setx` on Windows, `export ... ~/.zshrc` on macOS, `~/.bashrc` on Linux).
+- Example workflows in `examples/` plus an `examples/README.md` walkthrough.
+- `[tool.comfy] DisplayName` populated. `PublisherId` and `Icon` left as
+  documented TODOs in `CONTRIBUTING.md`.
+
+### Changed
+- `validate_config` accepts a `mode` parameter (`"read"` default, `"write"`
+  for save paths). Save nodes pass `mode="write"`.
+
+### Removed
+- `MinIO` provider preset is no longer shipped. Users running MinIO can still
+  point at it via the `Custom` provider plus `endpoint_url`.
+
+### Known limitations
+- `BrowseCloudFiles` (a Combo dropdown populated from bucket contents) was
+  evaluated and intentionally not shipped: calling boto3 inside `define_schema`
+  would block ComfyUI startup for offline users. A future enhancement using
+  ComfyUI's frontend-extension API would be the right path.
+- Concurrent batch uploads in `SaveImageToCloud` were evaluated and deferred:
+  boto3 clients are not thread-safe under shared use, and the existing
+  user-agent test infrastructure is single-threaded. Needs a per-thread client
+  design and test-infra rework.
+
 ## [0.2.0] - 2026-04-28
 
 ### Added

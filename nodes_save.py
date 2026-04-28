@@ -3,6 +3,8 @@
 import io as io_stdlib
 import json
 import logging
+import uuid
+from datetime import datetime
 
 import numpy as np
 from PIL import Image
@@ -13,7 +15,7 @@ import comfy.utils
 
 from .nodes_profile import S3_PROFILE_TYPE
 from .profile import apply_prefix, resolve_default_profile, validate_config
-from .providers import create_s3_client
+from .providers import create_s3_client, encode_tags, provider_supports_tagging
 
 logger = logging.getLogger(__name__)
 
@@ -77,14 +79,48 @@ def _tensor_to_image_bytes(
     return buf.getvalue()
 
 
+def _expand_filename_tokens(filename: str, batch_idx: int) -> str:
+    """Substitute %batch_num%, %date%, %time%, %uuid% in the user filename.
+
+    %uuid% is generated once per call so multiple substitutions on the same
+    line yield the same token. %date% and %time% use the local clock; if the
+    user wants a single moment across a batch they should pre-compute it.
+    """
+    if "%uuid%" in filename:
+        filename = filename.replace("%uuid%", uuid.uuid4().hex[:8])
+    if "%date%" in filename or "%time%" in filename:
+        now = datetime.now()
+        filename = filename.replace("%date%", now.strftime("%Y-%m-%d"))
+        filename = filename.replace("%time%", now.strftime("%H%M%S"))
+    return filename.replace("%batch_num%", str(batch_idx))
+
+
 def _build_key(config: dict, prefix: str, filename: str, batch_idx: int, ext: str) -> str:
     """Build the full S3 object key.
 
-    %batch_num% in `filename` is substituted with the batch index. The
-    `path_prefix` from the profile is applied via `apply_prefix`.
+    Filename templates (%batch_num%, %date%, %time%, %uuid%) are expanded
+    here. The `path_prefix` from the profile is applied via `apply_prefix`.
     """
-    name = filename.replace("%batch_num%", str(batch_idx))
+    name = _expand_filename_tokens(filename, batch_idx)
     return apply_prefix(config, f"{prefix}{name}.{ext}")
+
+
+def _put_object_kwargs(config: dict, body: bytes, content_type: str) -> dict:
+    """Assemble put_object kwargs, optionally including object Tagging.
+
+    Tagging is opt-in via `default_tags` in the profile and is skipped on
+    providers that don't implement S3 PutObjectTagging (currently B2).
+    """
+    kwargs = {"Body": body, "ContentType": content_type}
+    tags = config.get("default_tags") or {}
+    if tags and provider_supports_tagging(config.get("provider", "")):
+        kwargs["Tagging"] = encode_tags(tags)
+    elif tags:
+        logger.debug(
+            "Skipping object tags on %s — provider does not support tagging.",
+            config.get("provider"),
+        )
+    return kwargs
 
 
 def _s3_error_message(e) -> str:
@@ -110,7 +146,7 @@ class SaveImageToCloud(io.ComfyNode):
             node_id="SaveImageToCloud",
             display_name="Save Image to Cloud",
             category="cloud_storage/save",
-            description="Upload images to S3-compatible cloud storage (B2, S3, R2, MinIO, etc.).",
+            description="Upload images to S3-compatible cloud storage (B2, S3, R2, etc.).",
             search_aliases=["upload image", "s3 save", "cloud save", "b2 save"],
             inputs=[
                 io.Image.Input("images", tooltip="The images to upload."),
@@ -122,7 +158,10 @@ class SaveImageToCloud(io.ComfyNode):
                 io.String.Input(
                     "filename",
                     default="ComfyUI_%batch_num%",
-                    tooltip="Filename template. %batch_num% replaced with batch index.",
+                    tooltip=(
+                        "Filename template. Tokens: %batch_num%, %date% (YYYY-MM-DD), "
+                        "%time% (HHMMSS), %uuid% (8-char)."
+                    ),
                 ),
                 io.Combo.Input("format", options=["png", "jpg", "webp"], default="png"),
                 io.Int.Input(
@@ -132,11 +171,29 @@ class SaveImageToCloud(io.ComfyNode):
                     max=100,
                     tooltip="JPEG/WebP quality (ignored for PNG).",
                 ),
+                io.Boolean.Input(
+                    "presign_url",
+                    default=False,
+                    tooltip="If true, generate a presigned sharing URL for the first uploaded image.",
+                    optional=True,
+                ),
+                io.Int.Input(
+                    "expires_hours",
+                    default=24,
+                    min=1,
+                    max=168,
+                    tooltip="Expiration for the presigned URL in hours (max 7 days).",
+                    optional=True,
+                ),
                 io.Custom(S3_PROFILE_TYPE).Input(
                     "profile",
                     optional=True,
                     tooltip="Cloud storage profile. Uses env vars if not connected.",
                 ),
+            ],
+            outputs=[
+                io.String.Output(display_name="key"),
+                io.String.Output(display_name="url"),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
@@ -150,16 +207,19 @@ class SaveImageToCloud(io.ComfyNode):
         filename="ComfyUI_%batch_num%",
         format="png",
         quality=95,
+        presign_url=False,
+        expires_hours=24,
         profile=None,
     ) -> io.NodeOutput:
         from botocore.exceptions import ClientError
 
         config = profile or resolve_default_profile()
-        validate_config(config)
+        validate_config(config, mode="write")
         client = create_s3_client(**config)
         bucket = config["bucket"]
 
         uploaded = []
+        keys = []
         for batch_idx, image_tensor in enumerate(images):
             img_bytes = _tensor_to_image_bytes(
                 image_tensor,
@@ -173,18 +233,34 @@ class SaveImageToCloud(io.ComfyNode):
 
             try:
                 client.put_object(
-                    Bucket=bucket,
-                    Key=key,
-                    Body=img_bytes,
-                    ContentType=content_type,
+                    Bucket=bucket, Key=key,
+                    **_put_object_kwargs(config, img_bytes, content_type),
                 )
             except ClientError as e:
                 raise ValueError(_s3_error_message(e)) from e
 
             uploaded.append(f"s3://{bucket}/{key}")
+            keys.append(key)
             logger.info("Uploaded %s (%d bytes)", key, len(img_bytes))
 
-        return io.NodeOutput(ui={"text": uploaded})
+        first_key = keys[0] if keys else ""
+        url = ""
+        if presign_url and first_key:
+            try:
+                url = client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": bucket, "Key": first_key},
+                    ExpiresIn=expires_hours * 3600,
+                )
+                uploaded.append(f"url: {url}")
+            except ClientError as e:
+                # Don't fail the upload over a presign issue — surface the
+                # error in the UI text and return an empty url string so the
+                # downstream graph behaves predictably.
+                logger.warning("Presign failed: %s", e)
+                uploaded.append(f"presign failed: {_s3_error_message(e)}")
+
+        return io.NodeOutput(first_key, url, ui={"text": uploaded})
 
 
 class SaveVideoToCloud(io.ComfyNode):
@@ -200,11 +276,15 @@ class SaveVideoToCloud(io.ComfyNode):
             inputs=[
                 io.Video.Input("video", tooltip="The video to upload."),
                 io.String.Input("key_prefix", default="comfyui/videos/"),
-                io.String.Input("filename", default="ComfyUI_video"),
+                io.String.Input(
+                    "filename", default="ComfyUI_video",
+                    tooltip="Tokens: %batch_num%, %date%, %time%, %uuid%.",
+                ),
                 io.Combo.Input("format", options=Types.VideoContainer.as_input(), default="auto"),
                 io.Combo.Input("codec", options=Types.VideoCodec.as_input(), default="auto"),
                 io.Custom(S3_PROFILE_TYPE).Input("profile", optional=True),
             ],
+            outputs=[io.String.Output(display_name="key")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
@@ -215,7 +295,7 @@ class SaveVideoToCloud(io.ComfyNode):
         from comfy_api.latest import Types
 
         config = profile or resolve_default_profile()
-        validate_config(config)
+        validate_config(config, mode="write")
         client = create_s3_client(**config)
         bucket = config["bucket"]
 
@@ -254,13 +334,24 @@ class SaveVideoToCloud(io.ComfyNode):
             if pbar is not None:
                 pbar.update_absolute(uploaded, size)
 
+        # upload_fileobj uses ExtraArgs for tagging/content-type instead of
+        # the put_object kwargs format.
+        extra_args = {}
+        tags = config.get("default_tags") or {}
+        if tags and provider_supports_tagging(config.get("provider", "")):
+            extra_args["Tagging"] = encode_tags(tags)
+
         try:
-            client.upload_fileobj(buf, bucket, key, Callback=progress_callback)
+            client.upload_fileobj(
+                buf, bucket, key,
+                ExtraArgs=extra_args or None,
+                Callback=progress_callback,
+            )
         except ClientError as e:
             raise ValueError(_s3_error_message(e)) from e
 
         logger.info("Uploaded video %s (%d bytes)", key, size)
-        return io.NodeOutput(ui={"text": [f"s3://{bucket}/{key}"]})
+        return io.NodeOutput(key, ui={"text": [f"s3://{bucket}/{key}"]})
 
 
 class SaveAudioToCloud(io.ComfyNode):
@@ -275,10 +366,14 @@ class SaveAudioToCloud(io.ComfyNode):
             inputs=[
                 io.Audio.Input("audio", tooltip="The audio to upload."),
                 io.String.Input("key_prefix", default="comfyui/audio/"),
-                io.String.Input("filename", default="ComfyUI_audio"),
+                io.String.Input(
+                    "filename", default="ComfyUI_audio",
+                    tooltip="Tokens: %batch_num%, %date%, %time%, %uuid%.",
+                ),
                 io.Combo.Input("format", options=["flac", "mp3", "wav"], default="flac"),
                 io.Custom(S3_PROFILE_TYPE).Input("profile", optional=True),
             ],
+            outputs=[io.String.Output(display_name="key")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
@@ -289,7 +384,7 @@ class SaveAudioToCloud(io.ComfyNode):
         import torchaudio
 
         config = profile or resolve_default_profile()
-        validate_config(config)
+        validate_config(config, mode="write")
         client = create_s3_client(**config)
         bucket = config["bucket"]
 
@@ -301,6 +396,7 @@ class SaveAudioToCloud(io.ComfyNode):
         content_type = AUDIO_MIME_TYPES.get(format, "application/octet-stream")
 
         uploaded = []
+        keys = []
         for batch_idx in range(waveform.shape[0]):
             buf = io_stdlib.BytesIO()
             torchaudio.save(buf, waveform[batch_idx], sample_rate, format=format)
@@ -308,15 +404,14 @@ class SaveAudioToCloud(io.ComfyNode):
 
             try:
                 client.put_object(
-                    Bucket=bucket,
-                    Key=key,
-                    Body=buf.getvalue(),
-                    ContentType=content_type,
+                    Bucket=bucket, Key=key,
+                    **_put_object_kwargs(config, buf.getvalue(), content_type),
                 )
             except ClientError as e:
                 raise ValueError(_s3_error_message(e)) from e
 
             uploaded.append(f"s3://{bucket}/{key}")
+            keys.append(key)
             logger.info("Uploaded audio %s", key)
 
-        return io.NodeOutput(ui={"text": uploaded})
+        return io.NodeOutput(keys[0] if keys else "", ui={"text": uploaded})

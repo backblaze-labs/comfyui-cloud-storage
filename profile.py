@@ -8,10 +8,24 @@ Credentials are resolved in layers:
 """
 
 import os
+import sys
 import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _shell_hint(env_var: str, value_placeholder: str) -> str:
+    """Platform-appropriate command for setting an environment variable.
+
+    Returned text is appended to error messages so users see a copy-pastable
+    command for their OS instead of a generic "set the env var" instruction.
+    """
+    if sys.platform == "win32":
+        return f"setx {env_var} \"{value_placeholder}\"  (then restart ComfyUI)"
+    if sys.platform == "darwin":
+        return f"export {env_var}=\"{value_placeholder}\"  (add to ~/.zshrc to persist)"
+    return f"export {env_var}=\"{value_placeholder}\"  (add to ~/.bashrc to persist)"
 
 ENV_PREFIX = "COMFY_S3_"
 
@@ -85,7 +99,8 @@ def resolve_profile(
         provider, access_key, secret_key, region, bucket,
         endpoint_url, account_id, path_prefix
     """
-    # Start with env vars
+    # Start with env vars. `read_only` and `default_tags` are profile-only
+    # (not env-driven) — they're orthogonal to credential resolution.
     config = {
         "provider": "AWS S3",
         "access_key": "",
@@ -95,6 +110,8 @@ def resolve_profile(
         "endpoint_url": "",
         "account_id": "",
         "path_prefix": "",
+        "read_only": False,
+        "default_tags": {},
     }
     config.update({k: v for k, v in _profile_from_env().items() if v})
 
@@ -123,26 +140,35 @@ def resolve_default_profile() -> dict:
     return resolve_profile("(env vars)")
 
 
-def validate_config(config: dict) -> None:
-    """Raise ValueError with a clear message if required fields are missing or invalid."""
+def validate_config(config: dict, mode: str = "read") -> None:
+    """Raise ValueError with a clear message if the config is missing or invalid.
+
+    `mode` is "read" by default, or "write" for save/upload paths. When the
+    profile carries `read_only: true`, write-mode access is rejected — this
+    lets shared inference machines hold read-only credentials without nodes
+    accidentally uploading.
+    """
     # Lazy import to avoid a circular dependency at module load time.
     from .providers import PROVIDERS
 
     if not config.get("access_key"):
         raise ValueError(
             "Cloud storage access key not configured. "
-            "Set COMFY_S3_ACCESS_KEY env var, create a profile in "
-            f"{_get_profiles_path()}, or connect a CloudStorageProfile node."
+            f"{_shell_hint('COMFY_S3_ACCESS_KEY', '<your-key-id>')}, "
+            f"or create a profile in {_get_profiles_path()}, "
+            "or connect a CloudStorageProfile node."
         )
     if not config.get("secret_key"):
         raise ValueError(
             "Cloud storage secret key not configured. "
-            "Set COMFY_S3_SECRET_KEY env var or configure a profile."
+            f"{_shell_hint('COMFY_S3_SECRET_KEY', '<your-secret>')}, "
+            "or configure a profile."
         )
     if not config.get("bucket"):
         raise ValueError(
             "Cloud storage bucket not configured. "
-            "Set COMFY_S3_BUCKET env var or configure a profile."
+            f"{_shell_hint('COMFY_S3_BUCKET', '<bucket-name>')}, "
+            "or configure a profile."
         )
 
     provider = config.get("provider", "")
@@ -164,6 +190,12 @@ def validate_config(config: dict) -> None:
     if provider == "Custom" and not config.get("endpoint_url"):
         raise ValueError(
             "Custom provider requires COMFY_S3_ENDPOINT_URL (endpoint_url)."
+        )
+
+    if mode == "write" and config.get("read_only"):
+        raise ValueError(
+            "This cloud storage profile is marked read_only. "
+            "Remove `read_only: true` from the profile to allow uploads."
         )
 
 

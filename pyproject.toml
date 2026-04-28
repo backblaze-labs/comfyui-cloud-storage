@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-cloud-storage"
-version = "0.2.0"
-description = "Generic cloud storage nodes for ComfyUI - supports S3, B2, R2, MinIO, and more"
+version = "0.3.0"
+description = "Generic cloud storage nodes for ComfyUI - supports S3, B2, R2, and more"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -12,7 +12,6 @@ keywords = [
     "backblaze",
     "b2",
     "cloudflare-r2",
-    "minio",
     "wasabi",
     "object-storage",
 ]
@@ -45,8 +44,11 @@ Repository = "https://github.com/backblaze-b2-samples/comfyui-cloud-storage"
 Issues = "https://github.com/backblaze-b2-samples/comfyui-cloud-storage/issues"
 
 [tool.comfy]
+# TODO: PublisherId is required by the ComfyUI Manager registry. Set this to
+# the maintainer's registered publisher ID before submitting via
+# https://registry.comfy.org/. Icon is an optional URL to a 256x256 PNG.
 PublisherId = ""
-DisplayName = "Cloud Storage Nodes"
+DisplayName = "Cloud Storage Nodes (S3, B2, R2, ...)"
 Icon = ""
 
 [tool.pytest.ini_options]

@@ -33,15 +33,13 @@ class TestProviderPresets:
         from comfyui_cloud_storage.providers import PROVIDERS
         assert PROVIDERS["AWS S3"].endpoint_template == ""
 
-    def test_minio_uses_path_style(self):
-        from comfyui_cloud_storage.providers import PROVIDERS
-        assert PROVIDERS["MinIO"].force_path_style is True
-
-    def test_non_minio_uses_auto_style(self):
+    def test_all_providers_use_auto_style(self):
+        # All shipped providers use virtual-host-style addressing. The
+        # `force_path_style` field on ProviderPreset stays available so
+        # custom-endpoint users can still opt in via a fork or PR.
         from comfyui_cloud_storage.providers import PROVIDERS
         for name, preset in PROVIDERS.items():
-            if name != "MinIO":
-                assert preset.force_path_style is False, f"{name} should not use path style"
+            assert preset.force_path_style is False, f"{name} should not use path style"
 
 
 class TestCreateS3Client:
@@ -103,3 +101,87 @@ class TestCreateS3Client:
         config = mock_boto3.client.call_args.kwargs["config"]
         assert isinstance(config, Config)
         assert config.user_agent_extra == "b2ai-comfyui"
+
+    def test_extra_kwargs_ignored(self):
+        # Splatting a full profile dict (with bucket/path_prefix/default_tags)
+        # must not raise — the factory only consumes credential-relevant fields.
+        mock_boto3 = self._call_with_mock_boto3(
+            provider="AWS S3", access_key="AKID", secret_key="SECRET",
+            bucket="ignored", path_prefix="also-ignored", default_tags={"k": "v"},
+            read_only=True,
+        )
+        assert mock_boto3.client.called
+
+class TestClientCache:
+    def test_identical_calls_return_same_client(self):
+        from unittest.mock import patch
+        import sys
+        mock_boto3 = MagicMock()
+        with patch.dict(sys.modules, {"boto3": mock_boto3}):
+            from comfyui_cloud_storage.providers import (
+                create_s3_client, clear_client_cache,
+            )
+            clear_client_cache()
+            a = create_s3_client(provider="AWS S3", access_key="K", secret_key="S")
+            b = create_s3_client(provider="AWS S3", access_key="K", secret_key="S")
+        assert a is b
+        assert mock_boto3.client.call_count == 1
+
+    def test_different_creds_get_different_clients(self):
+        from unittest.mock import patch
+        import sys
+        mock_boto3 = MagicMock()
+        with patch.dict(sys.modules, {"boto3": mock_boto3}):
+            from comfyui_cloud_storage.providers import (
+                create_s3_client, clear_client_cache,
+            )
+            clear_client_cache()
+            create_s3_client(provider="AWS S3", access_key="K1", secret_key="S")
+            create_s3_client(provider="AWS S3", access_key="K2", secret_key="S")
+        assert mock_boto3.client.call_count == 2
+
+    def test_cache_evicts_oldest_when_full(self):
+        # Add 17 distinct clients; cache cap is 16, so the oldest should be gone.
+        from unittest.mock import patch
+        import sys
+        mock_boto3 = MagicMock()
+        with patch.dict(sys.modules, {"boto3": mock_boto3}):
+            from comfyui_cloud_storage.providers import (
+                create_s3_client, clear_client_cache, _client_cache,
+            )
+            clear_client_cache()
+            for i in range(17):
+                create_s3_client(
+                    provider="AWS S3", access_key=f"K{i}", secret_key="S",
+                )
+            assert len(_client_cache) == 16
+
+
+class TestEncodeTags:
+    def test_empty_returns_empty_string(self):
+        from comfyui_cloud_storage.providers import encode_tags
+        assert encode_tags({}) == ""
+        assert encode_tags(None) == ""
+
+    def test_single_tag(self):
+        from comfyui_cloud_storage.providers import encode_tags
+        assert encode_tags({"env": "prod"}) == "env=prod"
+
+    def test_special_chars_url_encoded(self):
+        from comfyui_cloud_storage.providers import encode_tags
+        # `=` and `&` in values must be percent-encoded so they don't break
+        # the Tagging header parser.
+        out = encode_tags({"k": "a=b&c"})
+        assert "%3D" in out or "=" not in out.split("=", 1)[1]
+        assert "%26" in out or "&" not in out.split("=", 1)[1]
+
+
+class TestProviderTaggingSupport:
+    def test_b2_excluded(self):
+        from comfyui_cloud_storage.providers import provider_supports_tagging
+        assert provider_supports_tagging("Backblaze B2") is False
+
+    def test_other_providers_supported(self):
+        from comfyui_cloud_storage.providers import provider_supports_tagging
+        for p in ["AWS S3", "Cloudflare R2", "Wasabi", "DigitalOcean Spaces", "Custom"]:
+            assert provider_supports_tagging(p) is True

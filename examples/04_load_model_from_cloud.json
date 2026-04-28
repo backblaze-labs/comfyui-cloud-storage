@@ -1,0 +1,53 @@
+{
+  "last_node_id": 2,
+  "last_link_id": 1,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadModelFromCloud",
+      "pos": [100, 100],
+      "size": [400, 180],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "profile", "type": "S3_PROFILE", "link": null}
+      ],
+      "outputs": [
+        {"name": "model_filename", "type": "STRING", "links": [1], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "LoadModelFromCloud"},
+      "widgets_values": [
+        "checkpoints",
+        "models/sd_xl_base_1.0.safetensors",
+        false
+      ]
+    },
+    {
+      "id": 2,
+      "type": "CheckpointLoaderSimple",
+      "pos": [560, 100],
+      "size": [380, 100],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "ckpt_name", "type": "STRING", "link": 1, "widget": {"name": "ckpt_name"}}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "links": null, "slot_index": 0},
+        {"name": "CLIP", "type": "CLIP", "links": null, "slot_index": 1},
+        {"name": "VAE", "type": "VAE", "links": null, "slot_index": 2}
+      ],
+      "properties": {"Node name for S&R": "CheckpointLoaderSimple"},
+      "widgets_values": [""]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "STRING"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

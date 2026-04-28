@@ -48,3 +48,15 @@ python -m pytest tests/ -v
 Please do **not** open a public issue for security-sensitive bugs. Email the
 maintainers at the address listed on the GitHub organization page, or use
 GitHub's private security advisory feature on this repository.
+
+## Publishing to the ComfyUI Manager registry
+
+The package is set up to be listed at https://registry.comfy.org/ but needs
+two things filled in before submission:
+
+- `[tool.comfy] PublisherId` in `pyproject.toml` — must match a registered
+  publisher account on the registry.
+- `[tool.comfy] Icon` (optional) — a public URL to a 256x256 PNG.
+
+Once those are populated, follow the registry's submission flow: create a
+publisher account, point it at this repository, and tag a release.

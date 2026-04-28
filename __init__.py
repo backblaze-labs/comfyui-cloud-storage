@@ -1,7 +1,7 @@
 """comfyui-cloud-storage - Generic cloud storage nodes for ComfyUI.
 
 Supports any S3-compatible provider: AWS S3, Backblaze B2, Cloudflare R2,
-MinIO, Wasabi, DigitalOcean Spaces, GCS (S3 interop), and custom endpoints.
+Wasabi, DigitalOcean Spaces, GCS (S3 interop), and custom endpoints.
 """
 
 from typing_extensions import override
@@ -24,7 +24,7 @@ class CloudStorageExtension(ComfyExtension):
         from .nodes_profile import CloudStorageProfile
         from .nodes_save import SaveImageToCloud, SaveVideoToCloud, SaveAudioToCloud
         from .nodes_load import LoadImageFromCloud, LoadAudioFromCloud, LoadModelFromCloud
-        from .nodes_browse import ListBucket, GeneratePresignedURL
+        from .nodes_browse import ListBucket, GeneratePresignedURL, TestCloudConnection
 
         return [
             CloudStorageProfile,
@@ -36,6 +36,7 @@ class CloudStorageExtension(ComfyExtension):
             LoadModelFromCloud,
             ListBucket,
             GeneratePresignedURL,
+            TestCloudConnection,
         ]
 
 
