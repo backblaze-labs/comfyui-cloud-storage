@@ -23,7 +23,7 @@ class CloudStorageExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         from .nodes_profile import CloudStorageProfile
         from .nodes_save import SaveImageToCloud, SaveVideoToCloud, SaveAudioToCloud
-        from .nodes_load import LoadImageFromCloud, LoadModelFromCloud
+        from .nodes_load import LoadImageFromCloud, LoadAudioFromCloud, LoadModelFromCloud
         from .nodes_browse import ListBucket, GeneratePresignedURL
 
         return [
@@ -32,6 +32,7 @@ class CloudStorageExtension(ComfyExtension):
             SaveVideoToCloud,
             SaveAudioToCloud,
             LoadImageFromCloud,
+            LoadAudioFromCloud,
             LoadModelFromCloud,
             ListBucket,
             GeneratePresignedURL,

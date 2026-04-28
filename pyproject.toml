@@ -1,15 +1,53 @@
 [project]
 name = "comfyui-cloud-storage"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generic cloud storage nodes for ComfyUI - supports S3, B2, R2, MinIO, and more"
+readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-dependencies = ["boto3>=1.28.0"]
+keywords = [
+    "comfyui",
+    "comfyui-nodes",
+    "s3",
+    "backblaze",
+    "b2",
+    "cloudflare-r2",
+    "minio",
+    "wasabi",
+    "object-storage",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: System :: Archiving",
+]
+dependencies = [
+    "boto3>=1.28.0",
+    "typing_extensions>=4.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
 
 [project.urls]
 Repository = "https://github.com/backblaze-b2-samples/comfyui-cloud-storage"
+Issues = "https://github.com/backblaze-b2-samples/comfyui-cloud-storage/issues"
 
 [tool.comfy]
 PublisherId = ""
 DisplayName = "Cloud Storage Nodes"
 Icon = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

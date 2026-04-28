@@ -1,4 +1,4 @@
-"""Load nodes - download images and models from S3-compatible storage."""
+"""Load nodes - download images, audio, and models from S3-compatible storage."""
 
 import io as io_stdlib
 import os
@@ -12,10 +12,40 @@ from comfy_api.latest import io
 import comfy.utils
 
 from .nodes_profile import S3_PROFILE_TYPE
-from .profile import resolve_default_profile, validate_config
+from .profile import apply_prefix, resolve_default_profile, validate_config
 from .providers import create_s3_client
 
 logger = logging.getLogger(__name__)
+
+
+def _client_error_to_value_error(e, bucket: str, key: str) -> ValueError:
+    """Translate a botocore ClientError into a user-friendly ValueError."""
+    code = e.response["Error"]["Code"]
+    if code in ("NoSuchKey", "404"):
+        return ValueError(f"Object not found: s3://{bucket}/{key}")
+    return ValueError(f"S3 error [{code}]: {e.response['Error']['Message']}")
+
+
+def _fingerprint_remote_object(key, profile):
+    """Shared fingerprint logic for cloud-load nodes.
+
+    Returns the S3 ETag when reachable, else a deterministic sentinel keyed
+    on the inputs. The sentinel keeps ComfyUI's cache stable per (bucket, key)
+    on transient failures without forcing a redundant re-fetch on every run.
+    """
+    try:
+        config = profile or resolve_default_profile()
+        client = create_s3_client(**config)
+        full_key = apply_prefix(config, key)
+        resp = client.head_object(Bucket=config["bucket"], Key=full_key)
+        etag = resp.get("ETag", "")
+        if etag:
+            return etag
+        return f"noetag:{config.get('bucket', '')}:{full_key}"
+    except Exception as e:
+        logger.debug("fingerprint_inputs failed: %s", e)
+        bucket = (profile or {}).get("bucket", "")
+        return f"noetag:{bucket}:{key}"
 
 
 class LoadImageFromCloud(io.ComfyNode):
@@ -53,17 +83,12 @@ class LoadImageFromCloud(io.ComfyNode):
         validate_config(config)
         client = create_s3_client(**config)
         bucket = config["bucket"]
-
-        # Prepend path_prefix if set
-        full_key = f"{config.get('path_prefix', '')}{key}" if not key.startswith("/") else key
+        full_key = apply_prefix(config, key)
 
         try:
             response = client.get_object(Bucket=bucket, Key=full_key)
         except ClientError as e:
-            code = e.response["Error"]["Code"]
-            if code == "NoSuchKey":
-                raise ValueError(f"Object not found: s3://{bucket}/{full_key}") from e
-            raise ValueError(f"S3 error [{code}]: {e.response['Error']['Message']}") from e
+            raise _client_error_to_value_error(e, bucket, full_key) from e
 
         image_data = response["Body"].read()
         img = Image.open(io_stdlib.BytesIO(image_data))
@@ -89,15 +114,7 @@ class LoadImageFromCloud(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, key, profile=None):
-        """Return S3 ETag so ComfyUI re-executes when the remote object changes."""
-        try:
-            config = profile or resolve_default_profile()
-            client = create_s3_client(**config)
-            full_key = f"{config.get('path_prefix', '')}{key}"
-            resp = client.head_object(Bucket=config["bucket"], Key=full_key)
-            return resp.get("ETag", "")
-        except Exception:
-            return ""
+        return _fingerprint_remote_object(key, profile)
 
 
 class LoadModelFromCloud(io.ComfyNode):
@@ -149,9 +166,8 @@ class LoadModelFromCloud(io.ComfyNode):
         validate_config(config)
         client = create_s3_client(**config)
         bucket = config["bucket"]
-        full_key = f"{config.get('path_prefix', '')}{key}"
+        full_key = apply_prefix(config, key)
 
-        # Resolve local cache path
         model_paths = folder_paths.get_folder_paths(model_type)
         if not model_paths:
             raise ValueError(f"No directory configured for model type: {model_type}")
@@ -160,30 +176,28 @@ class LoadModelFromCloud(io.ComfyNode):
         local_path = os.path.join(local_dir, filename)
         etag_path = local_path + ".s3etag"
 
-        # Check cache
+        # Cache hit path: compare cached ETag against remote.
         if os.path.exists(local_path) and not force_redownload:
             try:
                 remote_head = client.head_object(Bucket=bucket, Key=full_key)
                 remote_etag = remote_head.get("ETag", "")
                 if os.path.exists(etag_path):
-                    with open(etag_path, "r") as f:
+                    with open(etag_path, "r", encoding="utf-8") as f:
                         cached_etag = f.read().strip()
                     if cached_etag == remote_etag:
                         logger.info("Model cached: %s", local_path)
                         return io.NodeOutput(filename)
-            except ClientError:
-                # Can't verify, but file exists - use it
-                if os.path.exists(local_path):
-                    return io.NodeOutput(filename)
+            except ClientError as e:
+                # Network/auth blip but local copy exists — use it and warn.
+                logger.warning(
+                    "Could not verify cached model against remote (%s); using local copy.", e,
+                )
+                return io.NodeOutput(filename)
 
-        # Download with progress
         try:
             head = client.head_object(Bucket=bucket, Key=full_key)
         except ClientError as e:
-            code = e.response["Error"]["Code"]
-            if code in ("NoSuchKey", "404"):
-                raise ValueError(f"Model not found: s3://{bucket}/{full_key}") from e
-            raise ValueError(f"S3 error [{code}]: {e.response['Error']['Message']}") from e
+            raise _client_error_to_value_error(e, bucket, full_key) from e
 
         file_size = head["ContentLength"]
         remote_etag = head.get("ETag", "")
@@ -215,10 +229,67 @@ class LoadModelFromCloud(io.ComfyNode):
                 os.remove(temp_path)
             raise
 
-        # Store ETag for cache validation
+        # Atomic ETag write: write to a tmp file then rename, so a crash
+        # mid-write can't leave a half-written sentinel beside a complete model.
         if remote_etag:
-            with open(etag_path, "w") as f:
+            etag_tmp = etag_path + ".tmp"
+            with open(etag_tmp, "w", encoding="utf-8") as f:
                 f.write(remote_etag)
+            os.replace(etag_tmp, etag_path)
 
         logger.info("Model downloaded to: %s", local_path)
         return io.NodeOutput(filename)
+
+
+class LoadAudioFromCloud(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="LoadAudioFromCloud",
+            display_name="Load Audio from Cloud",
+            category="cloud_storage/load",
+            description="Download an audio file from S3-compatible cloud storage into the pipeline.",
+            search_aliases=["s3 audio", "download audio", "cloud audio", "b2 audio"],
+            inputs=[
+                io.String.Input(
+                    "key",
+                    default="",
+                    tooltip="S3 object key, e.g. 'comfyui/audio/clip.flac'",
+                ),
+                io.Custom(S3_PROFILE_TYPE).Input(
+                    "profile",
+                    optional=True,
+                    tooltip="Cloud storage profile. Uses env vars if not connected.",
+                ),
+            ],
+            outputs=[
+                io.Audio.Output(),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, key, profile=None) -> io.NodeOutput:
+        from botocore.exceptions import ClientError
+        import torchaudio
+
+        config = profile or resolve_default_profile()
+        validate_config(config)
+        client = create_s3_client(**config)
+        bucket = config["bucket"]
+        full_key = apply_prefix(config, key)
+
+        try:
+            response = client.get_object(Bucket=bucket, Key=full_key)
+        except ClientError as e:
+            raise _client_error_to_value_error(e, bucket, full_key) from e
+
+        # torchaudio.load accepts a file-like object; BytesIO keeps the
+        # download fully in memory which is fine for clips. Add a (B=1) axis
+        # so the output matches ComfyUI's audio tensor convention.
+        buf = io_stdlib.BytesIO(response["Body"].read())
+        waveform, sample_rate = torchaudio.load(buf)
+        return io.NodeOutput({"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate})
+
+    @classmethod
+    def fingerprint_inputs(cls, key, profile=None):
+        return _fingerprint_remote_object(key, profile)

@@ -14,7 +14,7 @@ ComfyUI stores everything on the local filesystem. Generated outputs pile up on 
 
 ### Solution
 
-This package adds 8 nodes that plug directly into the ComfyUI graph. Save nodes upload generated images, video, and audio to your bucket. Load nodes download and cache models locally with ETag-based invalidation and progress bars. Browse nodes list bucket contents and generate presigned sharing URLs. All nodes use the same credential profile, resolved from environment variables or a JSON config file -- secrets never appear in workflow JSON.
+This package adds 9 nodes that plug directly into the ComfyUI graph. Save nodes upload generated images, video, and audio to your bucket. Load nodes pull images and audio back into the pipeline, and download and cache models locally with ETag-based invalidation and progress bars. Browse nodes list bucket contents and generate presigned sharing URLs. All nodes use the same credential profile, resolved from environment variables or a JSON config file -- secrets never appear in workflow JSON.
 
 ### Who Should Use This
 
@@ -68,6 +68,7 @@ This package adds 8 nodes that plug directly into the ComfyUI graph. Save nodes 
 | **Save Video to Cloud** | `cloud_storage/save` | video, key_prefix, filename, format, codec, profile | UI text |
 | **Save Audio to Cloud** | `cloud_storage/save` | audio, key_prefix, filename, format, profile | UI text |
 | **Load Image from Cloud** | `cloud_storage/load` | key, profile | IMAGE, MASK |
+| **Load Audio from Cloud** | `cloud_storage/load` | key, profile | AUDIO |
 | **Download Model from Cloud** | `cloud_storage/models` | model_type, key, force_redownload, profile | model_filename (STRING) |
 | **List Bucket Contents** | `cloud_storage/browse` | prefix, max_results, profile | file_list (STRING) |
 | **Generate Sharing URL** | `cloud_storage/browse` | key, expires_hours, profile | url (STRING) |
@@ -230,6 +231,27 @@ Stored at `ComfyUI/user/__cloud_storage/profiles.json`:
 
 Credentials are resolved in order: environment variables -> named profile -> per-node widget overrides. Later layers override earlier ones. Widget overrides only apply to `bucket` and `path_prefix` -- credentials always come from env vars or the profile file.
 
+### Path prefix behavior
+
+Every load/save/browse node prepends `path_prefix` (from the profile or
+`COMFY_S3_PATH_PREFIX`) to its `key`/`key_prefix` argument. Leading slashes on
+the user-supplied key are stripped before joining, so `/photo.png` and
+`photo.png` produce the same final key. This keeps S3 object keys
+clean and avoids accidental double slashes.
+
+### Cache invalidation
+
+`Load Image from Cloud` and `Load Audio from Cloud` issue a `HEAD` against the
+remote object on each queue and use its `ETag` as ComfyUI's cache key. When the
+remote file changes, the node re-runs; when it doesn't, ComfyUI reuses the
+cached output. On transient network/auth failures the cache key falls back to a
+deterministic input-derived sentinel, so a flaky network does not silently
+freeze the cache or trigger redundant re-fetches.
+
+`Download Model from Cloud` writes a sidecar `.s3etag` next to the cached file
+and skips the download when the local ETag matches the remote one. Set
+`force_redownload=True` to bypass the cache.
+
 ## Testing
 
 ```bash
@@ -250,6 +272,9 @@ Tests mock boto3 and ComfyUI internals so they run standalone without a ComfyUI 
 | "Access denied" | Verify your key has read/write permissions on the bucket. For B2, check the application key's bucket scope. |
 | Model download stalls | Check network connectivity. The download uses a temp file (`.download` suffix) and cleans up on failure. |
 | "boto3 not installed" warning on startup | Run `pip install boto3` in the same Python environment as ComfyUI. |
+| "Cloudflare R2 requires either ..." | Set `COMFY_S3_ACCOUNT_ID` (your R2 account ID), or set `COMFY_S3_ENDPOINT_URL` to a fully-formed R2 endpoint. |
+| "Custom provider requires COMFY_S3_ENDPOINT_URL" | The `Custom` provider has no preset; you must supply an `endpoint_url` (env var, profile, or directly). |
+| "Unknown cloud storage provider" | Provider name is case-sensitive. Must be one of the values listed in the Supported Providers table. |
 
 ## Contributing
 

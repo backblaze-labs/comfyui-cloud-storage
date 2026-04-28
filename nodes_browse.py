@@ -5,7 +5,7 @@ import logging
 from comfy_api.latest import io
 
 from .nodes_profile import S3_PROFILE_TYPE
-from .profile import resolve_default_profile, validate_config
+from .profile import apply_prefix, resolve_default_profile, validate_config
 from .providers import create_s3_client
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class ListBucket(io.ComfyNode):
         client = create_s3_client(**config)
         bucket = config["bucket"]
 
-        full_prefix = f"{config.get('path_prefix', '')}{prefix}"
+        full_prefix = apply_prefix(config, prefix)
 
         try:
             paginator = client.get_paginator("list_objects_v2")
@@ -108,7 +108,7 @@ class GeneratePresignedURL(io.ComfyNode):
         client = create_s3_client(**config)
         bucket = config["bucket"]
 
-        full_key = f"{config.get('path_prefix', '')}{key}"
+        full_key = apply_prefix(config, key)
 
         try:
             url = client.generate_presigned_url(

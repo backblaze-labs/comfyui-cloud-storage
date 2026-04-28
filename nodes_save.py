@@ -9,10 +9,10 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 from comfy_api.latest import io
-from comfy.cli_args import args
+import comfy.utils
 
 from .nodes_profile import S3_PROFILE_TYPE
-from .profile import resolve_default_profile, validate_config
+from .profile import apply_prefix, resolve_default_profile, validate_config
 from .providers import create_s3_client
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,25 @@ MIME_TYPES = {
     "jpg": "image/jpeg",
     "webp": "image/webp",
 }
+
+AUDIO_MIME_TYPES = {
+    "flac": "audio/flac",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+}
+
+
+def _disable_metadata() -> bool:
+    """Whether ComfyUI is configured to strip workflow metadata from saves.
+
+    Reads `comfy.cli_args.args` lazily; degrades gracefully on forks that
+    don't expose the flag.
+    """
+    try:
+        from comfy.cli_args import args
+    except ImportError:
+        return False
+    return getattr(args, "disable_metadata", False)
 
 
 def _tensor_to_image_bytes(
@@ -40,7 +59,7 @@ def _tensor_to_image_bytes(
 
     if fmt == "png":
         metadata = None
-        if not args.disable_metadata:
+        if not _disable_metadata():
             metadata = PngInfo()
             if prompt is not None:
                 metadata.add_text("prompt", json.dumps(prompt))
@@ -59,10 +78,13 @@ def _tensor_to_image_bytes(
 
 
 def _build_key(config: dict, prefix: str, filename: str, batch_idx: int, ext: str) -> str:
-    """Build the full S3 object key."""
-    base_prefix = config.get("path_prefix", "")
+    """Build the full S3 object key.
+
+    %batch_num% in `filename` is substituted with the batch index. The
+    `path_prefix` from the profile is applied via `apply_prefix`.
+    """
     name = filename.replace("%batch_num%", str(batch_idx))
-    return f"{base_prefix}{prefix}{name}.{ext}"
+    return apply_prefix(config, f"{prefix}{name}.{ext}")
 
 
 def _s3_error_message(e) -> str:
@@ -199,7 +221,7 @@ class SaveVideoToCloud(io.ComfyNode):
 
         buf = io_stdlib.BytesIO()
         saved_metadata = None
-        if not args.disable_metadata:
+        if not _disable_metadata():
             metadata = {}
             if cls.hidden.extra_pnginfo is not None:
                 metadata.update(cls.hidden.extra_pnginfo)
@@ -214,18 +236,30 @@ class SaveVideoToCloud(io.ComfyNode):
             codec=codec,
             metadata=saved_metadata,
         )
+        size = buf.tell()
         buf.seek(0)
 
         ext = Types.VideoContainer.get_extension(format)
-        base_prefix = config.get("path_prefix", "")
-        key = f"{base_prefix}{key_prefix}{filename}.{ext}"
+        # batch_idx=0 since video is a single object; %batch_num% still substitutes for symmetry.
+        key = _build_key(config, key_prefix, filename, 0, ext)
+
+        # Progress bar for large video uploads (model uploads tend to be small;
+        # video can be hundreds of MB).
+        pbar = comfy.utils.ProgressBar(size) if size else None
+        uploaded = 0
+
+        def progress_callback(bytes_amount):
+            nonlocal uploaded
+            uploaded += bytes_amount
+            if pbar is not None:
+                pbar.update_absolute(uploaded, size)
 
         try:
-            client.upload_fileobj(buf, bucket, key)
+            client.upload_fileobj(buf, bucket, key, Callback=progress_callback)
         except ClientError as e:
             raise ValueError(_s3_error_message(e)) from e
 
-        logger.info("Uploaded video %s", key)
+        logger.info("Uploaded video %s (%d bytes)", key, size)
         return io.NodeOutput(ui={"text": [f"s3://{bucket}/{key}"]})
 
 
@@ -259,26 +293,30 @@ class SaveAudioToCloud(io.ComfyNode):
         client = create_s3_client(**config)
         bucket = config["bucket"]
 
-        buf = io_stdlib.BytesIO()
-        # audio is a dict with "waveform" and "sample_rate" keys
-        waveform = audio["waveform"].squeeze(0)
+        # audio is a dict with "waveform" (B, C, N) and "sample_rate" keys.
+        # Iterate the batch dim so multi-clip audio batches save as N files,
+        # mirroring SaveImageToCloud.
+        waveform = audio["waveform"]
         sample_rate = audio["sample_rate"]
-        torchaudio.save(buf, waveform, sample_rate, format=format)
-        buf.seek(0)
+        content_type = AUDIO_MIME_TYPES.get(format, "application/octet-stream")
 
-        mime_types = {"flac": "audio/flac", "mp3": "audio/mpeg", "wav": "audio/wav"}
-        base_prefix = config.get("path_prefix", "")
-        key = f"{base_prefix}{key_prefix}{filename}.{format}"
+        uploaded = []
+        for batch_idx in range(waveform.shape[0]):
+            buf = io_stdlib.BytesIO()
+            torchaudio.save(buf, waveform[batch_idx], sample_rate, format=format)
+            key = _build_key(config, key_prefix, filename, batch_idx, format)
 
-        try:
-            client.put_object(
-                Bucket=bucket,
-                Key=key,
-                Body=buf.getvalue(),
-                ContentType=mime_types.get(format, "application/octet-stream"),
-            )
-        except ClientError as e:
-            raise ValueError(_s3_error_message(e)) from e
+            try:
+                client.put_object(
+                    Bucket=bucket,
+                    Key=key,
+                    Body=buf.getvalue(),
+                    ContentType=content_type,
+                )
+            except ClientError as e:
+                raise ValueError(_s3_error_message(e)) from e
 
-        logger.info("Uploaded audio %s", key)
-        return io.NodeOutput(ui={"text": [f"s3://{bucket}/{key}"]})
+            uploaded.append(f"s3://{bucket}/{key}")
+            logger.info("Uploaded audio %s", key)
+
+        return io.NodeOutput(ui={"text": uploaded})

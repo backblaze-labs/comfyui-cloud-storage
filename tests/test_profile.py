@@ -121,6 +121,72 @@ class TestValidateConfig:
         from comfyui_cloud_storage.profile import validate_config
         validate_config({"access_key": "x", "secret_key": "x", "bucket": "x"})
 
+    def test_unknown_provider_raises(self):
+        from comfyui_cloud_storage.profile import validate_config
+        with pytest.raises(ValueError, match="Unknown cloud storage provider"):
+            validate_config({
+                "access_key": "x", "secret_key": "x", "bucket": "x",
+                "provider": "Bogus",
+            })
+
+    def test_r2_without_account_id_or_endpoint_raises(self):
+        from comfyui_cloud_storage.profile import validate_config
+        with pytest.raises(ValueError, match="Cloudflare R2"):
+            validate_config({
+                "access_key": "x", "secret_key": "x", "bucket": "x",
+                "provider": "Cloudflare R2",
+            })
+
+    def test_r2_with_account_id_passes(self):
+        from comfyui_cloud_storage.profile import validate_config
+        validate_config({
+            "access_key": "x", "secret_key": "x", "bucket": "x",
+            "provider": "Cloudflare R2", "account_id": "abc123",
+        })
+
+    def test_r2_with_endpoint_url_passes(self):
+        from comfyui_cloud_storage.profile import validate_config
+        validate_config({
+            "access_key": "x", "secret_key": "x", "bucket": "x",
+            "provider": "Cloudflare R2",
+            "endpoint_url": "https://abc.r2.cloudflarestorage.com",
+        })
+
+    def test_custom_without_endpoint_url_raises(self):
+        from comfyui_cloud_storage.profile import validate_config
+        with pytest.raises(ValueError, match="Custom provider requires"):
+            validate_config({
+                "access_key": "x", "secret_key": "x", "bucket": "x",
+                "provider": "Custom",
+            })
+
+    def test_custom_with_endpoint_url_passes(self):
+        from comfyui_cloud_storage.profile import validate_config
+        validate_config({
+            "access_key": "x", "secret_key": "x", "bucket": "x",
+            "provider": "Custom",
+            "endpoint_url": "https://my.example.com",
+        })
+
+
+class TestApplyPrefix:
+    def test_no_prefix_no_slash(self):
+        from comfyui_cloud_storage.profile import apply_prefix
+        assert apply_prefix({}, "foo/bar.png") == "foo/bar.png"
+
+    def test_strips_leading_slash(self):
+        from comfyui_cloud_storage.profile import apply_prefix
+        assert apply_prefix({}, "/foo/bar.png") == "foo/bar.png"
+
+    def test_with_prefix(self):
+        from comfyui_cloud_storage.profile import apply_prefix
+        assert apply_prefix({"path_prefix": "outputs/"}, "foo.png") == "outputs/foo.png"
+
+    def test_prefix_with_leading_slash_key(self):
+        from comfyui_cloud_storage.profile import apply_prefix
+        # Leading slash never escapes the prefix
+        assert apply_prefix({"path_prefix": "outputs/"}, "/foo.png") == "outputs/foo.png"
+
 
 class TestLoadProfileNames:
     @patch("comfyui_cloud_storage.profile._load_profiles", return_value={

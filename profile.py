@@ -29,14 +29,17 @@ ENV_KEYS = {
 
 
 def _get_profiles_path() -> str:
-    """Get path to the profiles JSON file in ComfyUI's system user directory."""
+    """Get path to the profiles JSON file in ComfyUI's system user directory.
+
+    Uses ComfyUI's HTTP-inaccessible system directory when available; falls back
+    to a user-home path only when running outside ComfyUI (e.g. for tests).
+    """
     try:
         import folder_paths
-        sys_dir = folder_paths.get_system_user_directory("cloud_storage")
-        return os.path.join(sys_dir, "profiles.json")
-    except (ImportError, Exception):
-        # Fallback for testing outside ComfyUI
+    except ImportError:
         return os.path.join(os.path.expanduser("~"), ".comfyui-cloud-storage", "profiles.json")
+    sys_dir = folder_paths.get_system_user_directory("cloud_storage")
+    return os.path.join(sys_dir, "profiles.json")
 
 
 def _load_profiles() -> dict:
@@ -45,7 +48,7 @@ def _load_profiles() -> dict:
     if not os.path.exists(path):
         return {}
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data.get("profiles", {})
     except (json.JSONDecodeError, OSError) as e:
@@ -121,7 +124,10 @@ def resolve_default_profile() -> dict:
 
 
 def validate_config(config: dict) -> None:
-    """Raise ValueError with a clear message if required fields are missing."""
+    """Raise ValueError with a clear message if required fields are missing or invalid."""
+    # Lazy import to avoid a circular dependency at module load time.
+    from .providers import PROVIDERS
+
     if not config.get("access_key"):
         raise ValueError(
             "Cloud storage access key not configured. "
@@ -138,3 +144,34 @@ def validate_config(config: dict) -> None:
             "Cloud storage bucket not configured. "
             "Set COMFY_S3_BUCKET env var or configure a profile."
         )
+
+    provider = config.get("provider", "")
+    if provider and provider not in PROVIDERS:
+        raise ValueError(
+            f"Unknown cloud storage provider: {provider!r}. "
+            f"Valid options: {', '.join(PROVIDERS)}."
+        )
+
+    # Cloudflare R2's preset endpoint requires an account_id; users can also
+    # bypass the preset by supplying endpoint_url directly.
+    if provider == "Cloudflare R2" and not config.get("endpoint_url") and not config.get("account_id"):
+        raise ValueError(
+            "Cloudflare R2 requires either COMFY_S3_ACCOUNT_ID (account_id) "
+            "or an explicit COMFY_S3_ENDPOINT_URL."
+        )
+
+    # Custom provider has no preset, so endpoint_url is the only way to reach it.
+    if provider == "Custom" and not config.get("endpoint_url"):
+        raise ValueError(
+            "Custom provider requires COMFY_S3_ENDPOINT_URL (endpoint_url)."
+        )
+
+
+def apply_prefix(config: dict, key: str) -> str:
+    """Combine `path_prefix` from the config with a user-supplied key.
+
+    Strips any leading slash from `key` to keep S3 object keys clean — S3 keys
+    do not begin with "/". This is the single source of truth for prefix
+    composition across save, load, and browse nodes.
+    """
+    return f"{config.get('path_prefix', '')}{key.lstrip('/')}"
