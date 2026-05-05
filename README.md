@@ -91,7 +91,7 @@ Prerequisites:
 - Access key and secret key for that provider
 
 ```bash
-cd ComfyUI/custom_nodes
+cd /path/to/ComfyUI/custom_nodes   # adjust to your ComfyUI install; if you're already inside ComfyUI/, just `cd custom_nodes`
 git clone https://github.com/backblaze-labs/comfyui-cloud-storage
 pip install -r comfyui-cloud-storage/requirements.txt
 ```
@@ -106,6 +106,10 @@ export COMFY_S3_BUCKET="your-bucket-name"
 export COMFY_S3_REGION="us-west-004"
 ```
 
+> `.env` files are **not** auto-loaded. Either `export` the variables in the
+> shell that launches ComfyUI, or use the `profiles.json` file described under
+> [Configuration](#configuration).
+
 The nodes appear under `cloud_storage/` in the node menu.
 
 ## Step-by-Step Setup
@@ -115,7 +119,7 @@ The nodes appear under `cloud_storage/` in the node menu.
 **Option A** -- Clone into custom_nodes:
 
 ```bash
-cd ComfyUI/custom_nodes
+cd /path/to/ComfyUI/custom_nodes   # adjust to your ComfyUI install; if you're already inside ComfyUI/, just `cd custom_nodes`
 git clone https://github.com/backblaze-labs/comfyui-cloud-storage
 pip install -r comfyui-cloud-storage/requirements.txt
 ```
