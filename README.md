@@ -81,6 +81,14 @@ The fastest way to learn this package is to drag one of the workflows in
 `02_test_connection.json` to confirm your credentials work, then explore the
 others. See [`examples/README.md`](./examples/README.md) for the full list.
 
+**Save and share an image** ([`03_save_and_share.json`](./examples/03_save_and_share.json)) — load any image, upload it to your bucket, and get back a presigned URL valid for 24 hours.
+
+![Save Image to Cloud workflow](./saveimagecloud.png)
+
+**Load a checkpoint from the cloud** ([`04_load_model_from_cloud.json`](./examples/04_load_model_from_cloud.json)) — pull an SDXL checkpoint from your bucket into ComfyUI's `models/checkpoints/` directory and feed it straight into Load Checkpoint. Re-runs use the cached file via ETag comparison.
+
+![Download Model from Cloud workflow](./downloadmodelcloud.png)
+
 ## Quick Start
 
 Prerequisites:

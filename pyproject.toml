@@ -19,7 +19,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -42,6 +41,13 @@ dev = [
 [project.urls]
 Repository = "https://github.com/backblaze-labs/comfyui-cloud-storage"
 Issues = "https://github.com/backblaze-labs/comfyui-cloud-storage/issues"
+
+[tool.setuptools]
+# This package is consumed two ways: ComfyUI loads the directory directly from
+# `custom_nodes/`, and the test suite resolves modules via conftest.py path
+# manipulation. Neither path needs setuptools to install the .py files into
+# site-packages, so we install metadata only and skip module discovery.
+py-modules = []
 
 [tool.comfy]
 # TODO: PublisherId is required by the ComfyUI Manager registry. Set this to
