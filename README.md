@@ -92,7 +92,7 @@ Prerequisites:
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/backblaze-b2-samples/comfyui-cloud-storage
+git clone https://github.com/backblaze-labs/comfyui-cloud-storage
 pip install -r comfyui-cloud-storage/requirements.txt
 ```
 
@@ -116,14 +116,14 @@ The nodes appear under `cloud_storage/` in the node menu.
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/backblaze-b2-samples/comfyui-cloud-storage
+git clone https://github.com/backblaze-labs/comfyui-cloud-storage
 pip install -r comfyui-cloud-storage/requirements.txt
 ```
 
 **Option B** -- Symlink for development:
 
 ```bash
-git clone https://github.com/backblaze-b2-samples/comfyui-cloud-storage ~/projects/comfyui-cloud-storage
+git clone https://github.com/backblaze-labs/comfyui-cloud-storage ~/projects/comfyui-cloud-storage
 ln -s ~/projects/comfyui-cloud-storage ComfyUI/custom_nodes/comfyui-cloud-storage
 pip install boto3
 ```

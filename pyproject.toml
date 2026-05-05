@@ -40,8 +40,8 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/backblaze-b2-samples/comfyui-cloud-storage"
-Issues = "https://github.com/backblaze-b2-samples/comfyui-cloud-storage/issues"
+Repository = "https://github.com/backblaze-labs/comfyui-cloud-storage"
+Issues = "https://github.com/backblaze-labs/comfyui-cloud-storage/issues"
 
 [tool.comfy]
 # TODO: PublisherId is required by the ComfyUI Manager registry. Set this to

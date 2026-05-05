@@ -7,7 +7,7 @@ every major provider — please keep that goal in mind when proposing changes.
 ## Getting set up
 
 ```bash
-git clone https://github.com/backblaze-b2-samples/comfyui-cloud-storage
+git clone https://github.com/backblaze-labs/comfyui-cloud-storage
 cd comfyui-cloud-storage
 pip install -e ".[dev]"
 ```
