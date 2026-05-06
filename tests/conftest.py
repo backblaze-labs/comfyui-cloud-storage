@@ -103,7 +103,10 @@ if _pkg is None:
     sys.modules["comfyui_cloud_storage"] = _pkg
     spec.loader.exec_module(_pkg)
 
-    # Also register submodules
+    # Also register submodules. Setting them as attributes on the parent
+    # package is required for unittest.mock.patch("comfyui_cloud_storage.X.Y")
+    # to resolve under Python 3.10; 3.11+ falls back to sys.modules, but 3.10
+    # only walks attributes.
     for submod_name in ["providers", "profile", "nodes_profile", "nodes_save", "nodes_load", "nodes_browse"]:
         submod_path = pkg_root / f"{submod_name}.py"
         if submod_path.exists():
@@ -114,3 +117,4 @@ if _pkg is None:
             sub_mod = importlib.util.module_from_spec(sub_spec)
             sys.modules[f"comfyui_cloud_storage.{submod_name}"] = sub_mod
             sub_spec.loader.exec_module(sub_mod)
+            setattr(_pkg, submod_name, sub_mod)
